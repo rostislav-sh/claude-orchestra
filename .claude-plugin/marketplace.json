@@ -1,0 +1,14 @@
+{
+  "name": "rostislav-plugins",
+  "description": "Плагины Ростислава для Claude Code",
+  "owner": {
+    "name": "Rostislav Shapovalov"
+  },
+  "plugins": [
+    {
+      "name": "orchestra",
+      "source": "./plugins/orchestra",
+      "description": "Оркестрация разработки: тимлид, ревьюер, архитектор, кодер, тестер, дебаггер"
+    }
+  ]
+}
