@@ -126,12 +126,31 @@ def find_root(cwd: str, project_dir: str) -> str:
         d = parent
 
 
+MSYS_DRIVE = re.compile(r"^/(?:cygdrive/)?([a-zA-Z])(?:/|$)")
+
+
+def native_path(path: str) -> str:
+    """На Windows Bash агента — Git Bash: /c/Users/... и /cygdrive/c/... там означают C:/Users/..."""
+    if os.name == "nt":
+        return MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", path, count=1)
+    return path
+
+
+def same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def is_inside(full: str, root: str) -> bool:
+    """full совпадает с root или лежит внутри; на Windows без учёта регистра и вида слешей."""
+    f, r = os.path.normcase(os.path.normpath(full)), os.path.normcase(os.path.normpath(root))
+    return f == r or f.startswith(r.rstrip(os.sep) + os.sep)
+
+
 def rel_to_root(path: str, cwd: str, root: str) -> str | None:
     """Путь относительно корня или None, если он вне корня."""
-    if not path:
-        path = cwd
+    path = native_path(path) if path else cwd
     full = os.path.realpath(path if os.path.isabs(path) else os.path.join(cwd, path))
-    if full != root and not full.startswith(root + os.sep):
+    if not is_inside(full, root):
         return None
     rel = os.path.relpath(full, root).replace("\\", "/")
     return "" if rel == "." else rel
@@ -476,7 +495,7 @@ def token_hits(tok: str, src: str, tests: str, vcwd: str, root: str) -> bool:
             continue
         if CODE_CHARS.search(part):
             # Кусок кода в кавычках (python -c "open('src/a.py')"): ищем упоминание папки.
-            if re.search(r"(^|[\s'\"=(:,/])" + re.escape(src) + r"(/|\s|$|['\");,])", part):
+            if re.search(r"(^|[\s'\"=(:,/\\])" + re.escape(src) + r"([/\\]|\s|$|['\");,])", part):
                 return True
             continue
         if path_hits(rel_to_root(part, vcwd, root), src, tests):
@@ -495,7 +514,7 @@ def check_tester_shell(argvs: list[list[str]], cwd: str, root: str, cfg: dict) -
     for argv in argvs:
         base = os.path.basename(argv[0])
         if base in ("cd", "pushd"):
-            target = next((a for a in argv[1:] if not a.startswith("-")), os.path.expanduser("~"))
+            target = native_path(next((a for a in argv[1:] if not a.startswith("-")), os.path.expanduser("~")))
             vcwd = os.path.realpath(target if os.path.isabs(target) else os.path.join(vcwd, target))
             continue
         if base == "git" or is_test_run(argv):
@@ -508,7 +527,7 @@ def check_tester_shell(argvs: list[list[str]], cwd: str, root: str, cfg: dict) -
             hit = any(token_hits(t, src, tests, vcwd, root) for t in argv[1:]) or token_hits(argv[0], src, tests, vcwd, root)
             if not hit and recursive:
                 has_path = any(
-                    not a.startswith("-") and os.path.exists(a if os.path.isabs(a) else os.path.join(vcwd, a))
+                    not a.startswith("-") and os.path.exists(os.path.join(vcwd, native_path(a)))
                     for a in argv[1:]
                 )
                 hit = not has_path and path_hits(rel_to_root(vcwd, vcwd, root), src, tests)
@@ -814,7 +833,10 @@ def post_tool_use(data: dict, ctx: dict) -> None:
         if not changes:
             return
         others_writes, overlap = concurrent_activity(sdir, ctx["agent"], manifest["t"])
-        changes = [(r, k) for r, k in changes if os.path.join(root, r) not in others_writes]
+        changes = [
+            (r, k) for r, k in changes
+            if not any(same_path(os.path.join(root, r), w) for w in others_writes)
+        ]
         if not changes:
             return
         hint = ROLE_HINTS.get(role, "")

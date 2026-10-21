@@ -210,7 +210,35 @@ def test_tester_shell_cannot_read_sources(project, cmd):
 
 
 def test_tester_shell_absolute_path(project):
-    assert run(project, "orchestra:tester", "Bash", {"command": f"cat {project}/src/a.py"}) == BLOCK
+    assert run(project, "orchestra:tester", "Bash", {"command": f"cat {project.as_posix()}/src/a.py"}) == BLOCK
+
+
+def windows_forms(project):
+    """Как агент в Git Bash на Windows может написать путь к src/a.py."""
+    posix = project.as_posix()
+    drive, rest = posix[0], posix[2:]
+    return [
+        f"cat '{project}\\src\\a.py'",
+        f"cat \"{posix}/src/a.py\"",
+        f"cat {posix.lower()}/src/a.py",
+        f"cat /{drive.lower()}{rest}/src/a.py",
+        f"cat /cygdrive/{drive.lower()}{rest}/src/a.py",
+        f"cd /{drive.lower()}{rest}/src && cat a.py",
+        f"python -c \"print(open(r'{project}\\src\\a.py').read())\"",
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="пути Windows и Git Bash")
+def test_tester_shell_windows_paths(project):
+    for cmd in windows_forms(project):
+        assert run(project, "orchestra:tester", "Bash", {"command": cmd}) == BLOCK, cmd
+
+
+@pytest.mark.skipif(os.name != "nt", reason="пути Windows и Git Bash")
+def test_tester_shell_windows_paths_to_tests_allowed(project):
+    drive, rest = project.as_posix()[0], project.as_posix()[2:]
+    for cmd in [f"cat /{drive.lower()}{rest}/tests/test_a.py", f"cat '{project}\\tests\\test_a.py'"]:
+        assert run(project, "orchestra:tester", "Bash", {"command": cmd}) == ALLOW, cmd
 
 
 @pytest.mark.parametrize("cmd", [
@@ -224,7 +252,7 @@ def test_tester_shell_allowed(project, cmd):
 
 
 def test_tester_shell_cd_to_project_then_pytest(project):
-    assert run(project, "orchestra:tester", "Bash", {"command": f"cd {project} && python -m pytest"}) == ALLOW
+    assert run(project, "orchestra:tester", "Bash", {"command": f"cd {project.as_posix()} && python -m pytest"}) == ALLOW
 
 
 def test_tester_shell_ignores_parent_dir_named_src(tmp_path, monkeypatch):
@@ -234,7 +262,7 @@ def test_tester_shell_ignores_parent_dir_named_src(tmp_path, monkeypatch):
     (proj / ".orchestra/config.json").write_text(json.dumps({"tests_dir": "tests", "source_dirs": ["src"]}))
     (proj / "tests").mkdir()
     (proj / "tests/conftest.py").write_text("")
-    assert run(proj, "orchestra:tester", "Bash", {"command": f"cat {proj}/tests/conftest.py"}) == ALLOW
+    assert run(proj, "orchestra:tester", "Bash", {"command": f"cat {proj.as_posix()}/tests/conftest.py"}) == ALLOW
 
 
 # ------------------------------------------------------------ Bash: снимок и откат
