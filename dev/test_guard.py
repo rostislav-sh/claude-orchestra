@@ -27,7 +27,7 @@ def project(tmp_path, monkeypatch):
 
 
 def call(project, agent_type, tool, tool_input, cwd=None, event="PreToolUse", tool_use_id=None,
-         agent_id=None, project_dir=None):
+         agent_id=None, project_dir=None, extra_env=None):
     payload = {
         "hook_event_name": event,
         "tool_name": tool,
@@ -41,10 +41,10 @@ def call(project, agent_type, tool, tool_input, cwd=None, event="PreToolUse", to
         payload["agent_id"] = agent_id
     if tool_use_id:
         payload["tool_use_id"] = tool_use_id
-    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(project_dir or project))
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(project_dir or project), **(extra_env or {}))
     return subprocess.run(
         [sys.executable, str(GUARD)],
-        input=json.dumps(payload), capture_output=True, text=True, env=env,
+        input=json.dumps(payload, ensure_ascii=False), capture_output=True, encoding="utf-8", env=env,
     )
 
 
@@ -64,6 +64,15 @@ def test_ignores_main_session_and_foreign_agents(project, agent):
 def test_garbage_input_does_not_block(project):
     proc = subprocess.run([sys.executable, str(GUARD)], input="not json", capture_output=True, text=True)
     assert proc.returncode == 0
+
+
+def test_utf8_io_regardless_of_locale(project):
+    # На Windows потоки Python по умолчанию в cp1251, а Claude Code говорит с хуком в UTF-8.
+    proc = call(project, "orchestra:tester", "Write", {"file_path": "src/модуль.py"},
+                extra_env={"PYTHONIOENCODING": "cp1251"})
+    assert proc.returncode == BLOCK
+    assert "Тестер" in proc.stderr
+    assert "src/модуль.py" in proc.stderr
 
 
 def test_no_orchestra_dir_main_session_is_noop(tmp_path, monkeypatch):

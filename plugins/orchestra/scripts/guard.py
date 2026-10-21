@@ -891,6 +891,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Claude Code обменивается с хуком в UTF-8, а на Windows потоки по умолчанию в кодировке
+    # локали (cp1251): кириллица в путях и сообщениях агенту превращается в мусор.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8")
     try:
         main()
     except SystemExit:
