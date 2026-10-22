@@ -16,7 +16,7 @@ color: blue
 
 1. **`.orchestra/architecture.md`** по шаблону из задачи:
    - слои и правило зависимостей между ними (например: api → services → repositories → models; домен не зависит от инфраструктуры);
-   - дерево файлов: какие создаются, какие меняются, за что отвечает каждый;
+   - дерево файлов: какие создаются, какие меняются, за что отвечает каждый — в формате из «Как рисовать дерево» ниже;
    - решения и альтернативы: почему так, а не иначе (кратко);
    - **таблица задач для кодеров**: id, что сделать, какие файлы трогает, от чего зависит. Задачи, которые можно делать параллельно, не должны пересекаться по файлам. Если пересечение неизбежно, явно пометь такие задачи как последовательные.
 
@@ -38,32 +38,59 @@ color: blue
 
 ```
 src/<pkg>/
-  domain/                  # чистый Python: не импортирует sqlalchemy, aiogram, playwright, httpx, pydantic-settings
-    entities/              # dataclass-сущности и value objects, файл на область (user.py, vacancy.py)
-    enums.py               # доменные статусы
-    exceptions/            # base.py (корень DomainError) + файл на группу: auth.py, vacancy.py, ...
-  application/
-    interfaces/            # порты (ABC или Protocol)
-      repositories/        # I<X>Repository, файл на агрегат
-      unitofwork.py        # IUnitOfWork, IUnitOfWorkFactory
-      <внешнее>.py         # клиенты внешних систем: llm, hh, браузер, уведомления
-    dto/                   # входы и выходы сценариев
-    services/              # сценарии (use cases); зависят только от domain и interfaces
-  infrastructure/
-    database/
-      engine.py            # движок и sessionmaker
-      models/              # ORM по модулям + base.py
-      mappers/             # ORM <-> сущность, если сущности отделены от моделей
-      repositories/        # SQLAlchemy<X>Repository
-      unitofwork.py        # SQLAlchemyUnitOfWork + SQLAlchemyUnitOfWorkFactory
-      migrations/
-    <интеграция>/          # http, llm, browser, broker, crypto...; у каждой свой errors.py
-  entrypoints/<service>/   # (или api/, services/<name>/) бот, воркер, HTTP
-    __main__.py
-    app.py                 # main() — composition root; сборка зависимостей в build_deps(settings)
-    handlers.py            # тонкие: разобрать вход -> вызвать сценарий -> ответить
-  config.py
-  log.py
+│
+├── domain/                      # только stdlib, без sqlalchemy/aiogram/playwright
+│   ├── entities/                # dataclass-сущности, файл на область
+│   ├── exceptions/              # base.py (корень) + файл на группу ошибок
+│   └── enums.py                 # доменные статусы
+│
+├── application/
+│   ├── interfaces/              # порты (ABC или Protocol)
+│   │   ├── repositories/        # I<X>Repository, файл на агрегат
+│   │   ├── unitofwork.py        # IUnitOfWork, IUnitOfWorkFactory
+│   │   └── <внешнее>.py         # клиенты: llm, hh, браузер, уведомления
+│   ├── dto/                     # входы и выходы сценариев
+│   └── services/                # сценарии; только domain и interfaces
+│
+├── infrastructure/
+│   ├── database/
+│   │   ├── models/              # ORM по модулям + base.py
+│   │   ├── mappers/             # ORM <-> сущность, если нужны
+│   │   ├── repositories/        # SQLAlchemy<X>Repository
+│   │   ├── migrations/
+│   │   ├── engine.py            # движок и sessionmaker
+│   │   └── unitofwork.py        # UoW + фабрика UoW
+│   └── <интеграция>/            # http, llm, browser, broker; свой errors.py
+│
+├── entrypoints/<service>/       # бот, воркер, HTTP (или api/)
+│   ├── __main__.py
+│   ├── app.py                   # main(): composition root, build_deps(settings)
+│   └── handlers.py              # тонкие: вход -> сценарий -> ответ
+│
+├── config.py
+└── log.py
+```
+
+### Как рисовать дерево
+
+Так пользователю удобнее читать. Символы `├──`, `└──`, `│`, пустая строка с `│` между пакетами верхнего уровня, комментарий через `#` после имени. Комментарий короткий: вся строка не длиннее ~90 символов, чтобы не переносилась. Подробности (что откуда переезжает, список классов) — в таблице «старый модуль → новый путь», не в дереве.
+
+```
+my_project/
+│
+├── src/
+│   ├── config/
+│   │   └── settings.py          # настройки из env
+│   │
+│   ├── users/
+│   │   ├── models.py            # ORM-модели пользователей
+│   │   ├── repositories.py      # запросы к БД
+│   │   └── services.py          # сценарии
+│   │
+│   └── main.py                  # точка входа
+│
+├── tests/
+└── pyproject.toml
 ```
 
 Правила:
