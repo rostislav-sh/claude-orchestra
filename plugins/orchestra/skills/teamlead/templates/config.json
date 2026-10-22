@@ -1,4 +1,5 @@
 {
   "tests_dir": "tests",
-  "source_dirs": ["src"]
+  "source_dirs": ["src"],
+  "mode": "auto"
 }
