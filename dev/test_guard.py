@@ -251,6 +251,29 @@ def test_tester_shell_allowed(project, cmd):
     assert run(project, "orchestra:tester", "Bash", {"command": cmd}) == ALLOW, cmd
 
 
+@pytest.mark.parametrize("cmd", [
+    "docker build -f src/Dockerfile --target test .",
+    "docker build --progress=plain -f src/Dockerfile --target=tests .",
+    "docker buildx build --target test -f src/Dockerfile .",
+    "docker compose run --rm -e X=1 app pytest -q",
+    "docker compose -f src/compose.yml exec app uv run pytest tests",
+    "docker-compose run app python -m pytest",
+])
+def test_tester_shell_docker_test_runs_allowed(project, cmd):
+    assert run(project, "orchestra:tester", "Bash", {"command": cmd}) == ALLOW, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "docker build -f src/Dockerfile .",
+    "docker build -f src/Dockerfile --target prod .",
+    "docker compose run app cat src/a.py",
+    "docker compose exec app sh -c 'cat src/a.py'",
+    "docker run img cat src/a.py",
+])
+def test_tester_shell_docker_other_blocked(project, cmd):
+    assert run(project, "orchestra:tester", "Bash", {"command": cmd}) == BLOCK, cmd
+
+
 def test_tester_shell_cd_to_project_then_pytest(project):
     assert run(project, "orchestra:tester", "Bash", {"command": f"cd {project.as_posix()} && python -m pytest"}) == ALLOW
 

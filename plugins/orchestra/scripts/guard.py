@@ -461,7 +461,54 @@ TEST_MODULES = {"pytest", "unittest", "coverage", "nose", "tox", "nox"}
 PROJECT_RUNNERS = {"uv", "poetry", "pdm", "hatch", "pipenv", "rye"}
 
 
+# Флаги `docker compose run/exec`, у которых есть значение (его не путаем с именем сервиса).
+COMPOSE_VALUE_FLAGS = {
+    "-e", "--env", "-w", "--workdir", "-u", "--user", "--entrypoint", "-v", "--volume",
+    "-p", "--publish", "--name", "-l", "--label", "--env-file", "--index",
+}
+
+
+def _docker_target(rest: list[str]) -> str | None:
+    for i, a in enumerate(rest):
+        if a == "--target" and i + 1 < len(rest):
+            return rest[i + 1]
+        if a.startswith("--target="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def is_docker_test_run(argv: list[str]) -> bool:
+    """Тесты в контейнере: `docker [buildx] build --target test` или `docker compose run|exec svc pytest`.
+
+    Сборка с исходниками в контексте их не показывает: тестер видит вывод тестов, а не код.
+    """
+    if os.path.basename(argv[0]) not in ("docker", "docker-compose", "podman"):
+        return False
+    rest = argv[1:]
+    if rest[:1] == ["buildx"]:
+        rest = rest[1:]
+    if rest[:1] == ["build"]:
+        target = _docker_target(rest[1:])
+        return target is not None and re.fullmatch(r"tests?", target) is not None
+    if os.path.basename(argv[0]) != "docker-compose":
+        if rest[:1] != ["compose"]:
+            return False
+        rest = rest[1:]
+    i = 0
+    while i < len(rest) and rest[i].startswith("-"):  # глобальные флаги compose: -f file, -p name
+        i += 2 if rest[i] in ("-f", "--file", "-p", "--project-name", "--profile", "--env-file") else 1
+    if i >= len(rest) or rest[i] not in ("run", "exec"):
+        return False
+    i += 1
+    while i < len(rest) and rest[i].startswith("-"):
+        i += 2 if rest[i] in COMPOSE_VALUE_FLAGS else 1
+    cmd = rest[i + 1:]  # после имени сервиса
+    return bool(cmd) and is_test_run(cmd)
+
+
 def is_test_run(argv: list[str]) -> bool:
+    if is_docker_test_run(argv):
+        return True
     base = os.path.basename(argv[0])
     rest = argv[1:]
     if base in PROJECT_RUNNERS and rest[:1] == ["run"]:
