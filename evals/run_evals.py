@@ -379,16 +379,17 @@ def render_summary(s: dict) -> str:
     for name, c in s["cases"].items():
         fails = ", ".join(f"{key}×{v}" for key, v in c["check_fail_counts"].items() if v) or "—"
         lines.append(f"| {name} | {c['passed']}/{c['runs']} | {c['pass_hat']['1']} | {c['pass_hat'].get(str(c['runs']))} | "
-                     f"{round(c['mean_cost_usd'], 2) if c['mean_cost_usd'] is not None else '—'} | {c['mean_wall_s']} | {fails} |")
+                     f"{round(c['mean_cost_usd'], 2) if c['mean_cost_usd'] is not None else '—'} | {round(c['mean_wall_s']) if c['mean_wall_s'] is not None else '—'} | {fails} |")
     o = s["overall"]
     hat_k = f", pass^{k} {o.get(f'pass_hat_{k}')}" if k > 1 else ""
     lines += ["", f"Итого: успешно {o['pass_rate']}, pass^1 {o['pass_hat_1']}{hat_k}, "
                   f"потрачено ${o['total_cost_usd']}", "", "## Токены по ролям (среднее на прогон)", ""]
     for name, c in s["cases"].items():
         lines += [f"**{name}**", "", "| роль | вход всего | чтение кеша | выход | Read/Grep/Glob |", "|---|---|---|---|---|"]
-        for role, g in c["mean_tokens_by_role"].items():
+        roles = sorted(c["mean_tokens_by_role"].items(), key=lambda kv: (kv[0] == "ИТОГО", kv[0] != "teamlead", kv[0]))
+        for role, g in roles:
             t = lambda v: usage.fmt_tokens(int(v)) if isinstance(v, (int, float)) else "—"
-            lines.append(f"| {role} | {t(g['input_total'])} | {t(g['cache_read'])} | {t(g['output'])} | {g['explore_calls']} |")
+            lines.append(f"| {role} | {t(g['input_total'])} | {t(g['cache_read'])} | {t(g['output'])} | {round(g['explore_calls'], 1) if g['explore_calls'] is not None else '—'} |")
         lines.append("")
     return "\n".join(lines)
 
