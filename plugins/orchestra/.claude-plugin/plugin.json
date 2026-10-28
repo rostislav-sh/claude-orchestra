@@ -1,7 +1,7 @@
 {
   "name": "orchestra",
   "description": "Оркестрация разработки командой агентов: тимлид (основная сессия), ревьюер и архитектор на Opus, кодер, тестер и дебаггер на Sonnet",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "author": {
     "name": "Rostislav Shapovalov"
   }

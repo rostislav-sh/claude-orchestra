@@ -1,5 +1,5 @@
 {
-  "description": "orchestra: границы ролей агентов (запись, чтение тестером, git) и откат запрещённых правок через Bash",
+  "description": "orchestra: границы ролей агентов (запись, чтение тестером, git), откат запрещённых правок через Bash и журнал расхода токенов",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,7 +8,9 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/guard.py"]
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/guard.py"
+            ]
           }
         ]
       }
@@ -20,7 +22,9 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/guard.py"]
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/guard.py"
+            ]
           }
         ]
       }
@@ -32,7 +36,37 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/guard.py"]
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/guard.py"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/usage.py",
+              "hook"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/usage.py",
+              "hook"
+            ]
           }
         ]
       }

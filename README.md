@@ -42,7 +42,7 @@ claude plugin install orchestra@rostislav-plugins --scope project
 2. **Ревью плана** с чистым контекстом, разбор замечаний с вами.
 3. **Архитектура**: `architecture.md`, `contracts.md`, таблица задач. Вы одобряете.
 4. **Реализация**: кодеры параллельно на задачах без общих файлов, тестер параллельно пишет тесты по контрактам. Задачи с общими файлами идут последовательно.
-5. **Проверка**: прогон тестов, разбор падений тимлидом (код / тест / контракт / окружение), не больше 3 кругов на пункт, ревью кода, ручная проверка дебаггером. Если окружение не поднимается (например, в облаке без Docker), проверка уходит в todo.
+5. **Проверка**: прогон тестов скриптом `run_tests.py` (короткий JSON вместо простыни вывода), разбор падений тимлидом (код / тест / контракт / окружение), не больше 3 кругов на пункт, ревью кода, ручная проверка дебаггером. Если окружение не поднимается (например, в облаке без Docker), проверка уходит в todo.
 6. **Отчёт и коммит** — зависит от режима (ниже). Сабагенты не коммитят никогда. Коммиты идут от вашего имени, без приписок о Claude: автор берётся из `commit_author` в `.orchestra/config.json`, иначе из `git config` (если там не Claude); в облаке тимлид один раз спросит имя и почту.
 
 ## Режимы: ПК и облако
@@ -87,12 +87,64 @@ claude plugin install orchestra@rostislav-plugins --scope project
 
 Хук требует `python3` (3.9+) в PATH. Если его нет (бывает на Windows), хук не блокирует ничего, и ограничения держатся только на инструкциях агентов.
 
+## Прогон тестов: `scripts/run_tests.py`
+
+Тимлид и тестер запускают тесты не голым pytest, а скриптом плагина. Он печатает короткий JSON — счётчики и только упавшие тесты:
+
+```json
+{"status": "failed", "passed": 1, "failed": 1, "errors": 0, "skipped": 0,
+ "failures": [{"test": "tests/test_calc.py::test_add", "message": "assert -1 == 3",
+               "location": "tests/test_calc.py:4", "details": "<сокращённый трейсбек>"}]}
+```
+
+- результат разбирается из JUnit XML, трейсбек обрезан до 25 строк, падений подробно — до 20 (`--max-failures`);
+- тот же JSON лежит в `.orchestra/reports/last-test-run.json`;
+- **кеш**: если с последнего зелёного прогона не изменились исходники, тесты, конфиги (`pyproject.toml`, lock-файлы, `conftest.py`) и аргументы, тесты не запускаются — возвращается прошлый результат с `"cached": true`. Красные прогоны не кешируются. `--no-cache` — запустить всё равно;
+- команда: `test_command` в `.orchestra/config.json` (например, `"uv run pytest"` или `"docker compose run --rm app pytest"`), иначе `python -m pytest` из `.venv` проекта.
+
+Хук считает скрипт запуском тестов, поэтому тестеру он доступен так же, как pytest.
+
+## Журнал расхода токенов
+
+Хук на `SubagentStop` и `Stop` (`scripts/usage.py`) после каждого сабагента и каждого хода тимлида читает транскрипт и дописывает в `.orchestra/reports/usage.jsonl`: роль, модель, запросы, вход без кеша, запись и чтение кеша, выход, вызовы инструментов. Модель он не вызывает и токенов не тратит; пишет только в проектах с папкой `.orchestra/`.
+
+Тимлид заканчивает каждое задание сабагенту меткой `[orchestra пункт=2 круг=1 фаза=тесты]` — по ней расход раскладывается по пунктам и кругам:
+
+```bash
+python3 <плагин>/scripts/usage.py report              # по ролям
+python3 <плагин>/scripts/usage.py report --by round   # пункт / круг / роль
+python3 <плагин>/scripts/usage.py report --json
+```
+
+Пример вывода (числа условные):
+
+| role | записей | запросов | вход | запись кеша | чтение кеша | выход | доля кеша | вызовов (Read/Grep/Glob) | $ |
+|---|---|---|---|---|---|---|---|---|---|
+| coder | 3 | 41 | 120 | 38k | 1.10M | 9.2k | 96% | 35 (22) | — |
+
+Доллары считаются, только если в `.orchestra/config.json` есть цены (за 1 млн токенов); для модели без цены стоимость `—`, а не ноль:
+
+```json
+{"prices": {"claude-sonnet-5-5": {"input": 2, "cache_write": 2.5, "cache_read": 0.1, "output": 10}}}
+```
+
+## Eval
+
+`evals/` — проверка плагина целиком: тимлид решает задачи в маленьком проекте, результат проверяет код, а не модель. Подробно — в [evals/README.md](evals/README.md).
+
+```bash
+python3 evals/run_evals.py self-check                          # кейсы корректны (без Claude, бесплатно)
+python3 evals/run_evals.py run --cases s-bugfix-promo -k 1     # один прогон
+python3 evals/run_evals.py run -k 3                            # все кейсы, pass^3
+python3 evals/run_evals.py compare evals/results/A/summary.json evals/results/B/summary.json
+```
+
 ## Разработка
 
 ```bash
 claude --plugin-dir ./plugins/orchestra      # загрузить без установки
 claude plugin validate ./plugins/orchestra
-python3 -m pytest dev -q                      # тесты хука
+python3 -m pytest dev -q                      # тесты хука, скриптов и обвязки eval
 ```
 
-CI (`.github/workflows/ci.yml`) гоняет тесты хука на Python 3.9 и 3.13 и `claude plugin validate`.
+CI (`.github/workflows/ci.yml`) гоняет тесты из `dev/` (хук, `run_tests.py`, журнал расхода, self-check кейсов eval) на Python 3.9 и 3.13 и `claude plugin validate`. Сам eval с вызовом Claude в CI не запускается: он платный.

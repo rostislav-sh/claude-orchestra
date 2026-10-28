@@ -246,6 +246,8 @@ def test_tester_shell_windows_paths_to_tests_allowed(project):
     "cat tests/test_a.py", "ls", "ls tests", "grep -rn def tests", "git status",
     "git diff -- tests/", "git log --oneline", "cat .orchestra/contracts.md",
     "cd tests && cat test_a.py",
+    "python3 /opt/plugins/orchestra/scripts/run_tests.py --cov=src",
+    "python3 /opt/plugins/orchestra/scripts/run_tests.py src/../tests -k export",
 ])
 def test_tester_shell_allowed(project, cmd):
     assert run(project, "orchestra:tester", "Bash", {"command": cmd}) == ALLOW, cmd
@@ -460,3 +462,18 @@ def test_worktree_bash_revert(project):
     post = bash_cycle(project, "coder", "sed -i x tests/test_a.py", lambda: test_file.write_text("bad"), cwd=wt)
     assert post.returncode == BLOCK
     assert test_file.read_text() == original
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 -m run_tests src",           # не скрипт плагина, а модуль
+    "python3 other.py src/a.py",
+    "python3 -c 'print(open(\"src/a.py\").read())'",
+])
+def test_tester_shell_only_run_tests_script_counts_as_test_run(project, cmd):
+    assert run(project, "orchestra:tester", "Bash", {"command": cmd}) == BLOCK, cmd
+
+
+def test_block_is_written_to_guard_log(project):
+    assert run(project, "orchestra:tester", "Read", {"file_path": str(project / "src/a.py")}) == BLOCK
+    log = (project / ".orchestra/reports/guard.log").read_text(encoding="utf-8")
+    assert "tester: заблокировано Read" in log and "src/a.py" in log

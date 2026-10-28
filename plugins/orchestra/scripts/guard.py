@@ -518,8 +518,11 @@ def is_test_run(argv: list[str]) -> bool:
         base, rest = os.path.basename(rest[0]), rest[1:]
     if base in TEST_RUNNERS:
         return True
-    if re.match(r"^python(\d(\.\d+)?)?$", base) and len(rest) >= 2 and rest[0] == "-m":
-        return rest[1] in TEST_MODULES
+    if re.match(r"^python(\d(\.\d+)?)?(\.exe)?$", base) and rest:
+        if len(rest) >= 2 and rest[0] == "-m":
+            return rest[1] in TEST_MODULES
+        # Скрипт плагина: запускает только pytest проекта (команду берёт из .orchestra/config.json).
+        return os.path.basename(rest[0]) == "run_tests.py"
     return False
 
 
@@ -953,6 +956,9 @@ def main() -> None:
         try:
             pre_tool_use(data, ctx)
         except Blocked as exc:
+            # Блокировки тоже в журнал: по ним видно дыры в контрактах и считается eval.
+            target = ctx["tin"].get("command") or ctx["tin"].get("file_path") or ctx["tin"].get("path") or ""
+            guard_log(root, project_dir, f"{role}: заблокировано {ctx['tool']} | {' '.join(str(target).split())[:200]} | {exc}")
             print(f"[orchestra guard] {exc}", file=sys.stderr)
             sys.exit(2)
     elif event in ("PostToolUse", "PostToolUseFailure"):
