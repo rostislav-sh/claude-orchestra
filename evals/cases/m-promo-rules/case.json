@@ -1,0 +1,10 @@
+{
+  "name": "m-promo-rules",
+  "level": "M",
+  "description": "Трудный: много точных требований с подвохами (округление до потолка, исключения, даты, совместимость)",
+  "fixture": "shop",
+  "task": "Расширь промокоды магазина.\n\n1. В `shop.models.PromoCode` добавь необязательные поля, старый вызов `PromoCode(code, percent)` должен работать как раньше:\n   - `min_subtotal: Decimal = Decimal(\"0\")` — минимальная скидочная база (см. п. 2);\n   - `max_discount: Optional[Decimal] = None` — потолок скидки в рублях;\n   - `excluded_skus: FrozenSet[str] = frozenset()` — товары, на которые скидка не распространяется; можно передать любой итерируемый объект (список, множество), храниться должен как `frozenset`, а `PromoCode` должен оставаться неизменяемым и хешируемым;\n   - `valid_from: Optional[date] = None`, `valid_to: Optional[date] = None` — срок действия, обе границы включительно; `None` — без ограничения с этой стороны.\n   Конструктор бросает `ValueError`, если `min_subtotal < 0`, `max_discount <= 0` или `valid_from > valid_to` (проверка `percent` остаётся).\n\n2. В `shop.cart.Cart` добавь метод `discount(today: Optional[date] = None) -> Decimal` и параметр `today: Optional[date] = None` в `total()`. Если `today` не передан, используется `date.today()`. Правила:\n   - скидочная база — сумма `line_total` позиций, чей sku не входит в `excluded_skus`;\n   - скидка 0, если промокода нет, если база меньше `min_subtotal` или если `today` вне срока действия;\n   - иначе скидка = база × percent / 100, сначала округлённая `money()`, и только потом ограниченная `max_discount` (если он задан);\n   - `total(today)` = `money(subtotal − discount(today))`, где subtotal — сумма всех позиций.\n\nСуществующее поведение корзины без новых полей не должно измениться.",
+  "must_not_change": [],
+  "min_new_tests": 6,
+  "timeout_s": 3600
+}
