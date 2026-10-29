@@ -294,6 +294,7 @@ def one_run(case: dict, idx: int, args, out_dir: Path) -> dict:
             "turns": claude.get("num_turns"),
             "wall_s": claude.get("wall_s"),
             "subagents": (claude.get("subagent_stats") or {}).get("spawned"),
+            "resumes": sum(1 for r in rows if r.get("role") != "teamlead" and r.get("resumed")),
             "usage_by_role": by_role,
             "guard": guard_events(work),
             "branch": git(work, "rev-parse", "--abbrev-ref", "HEAD", check=False),
@@ -349,6 +350,8 @@ def summarize(records: list[dict], k: int, meta: dict) -> dict:
             "mean_cost_usd": mean([r.get("cost_usd") for r in recs]),
             "mean_wall_s": mean([r.get("wall_s") for r in recs]),
             "mean_turns": mean([r.get("turns") for r in recs]),
+            "mean_subagents": mean([r.get("subagents") for r in recs]),
+            "mean_resumes": mean([r.get("resumes") for r in recs]),
             "check_fail_counts": {
                 key: sum(1 for r in recs if key in r.get("checks", {}) and not r["checks"][key]["ok"])
                 for key in REQUIRED + ("new_tests",)
@@ -374,12 +377,13 @@ def render_summary(s: dict) -> str:
     k = s["meta"]["k"]
     lines = [f"# Eval orchestra — {s['meta']['started']}", "",
              f"Модель тимлида: {s['meta']['model']}, попыток на кейс: {k}, коммит плагина: {s['meta']['commit']}", "",
-             "| кейс | успешно | pass^1 | pass^k | $ в среднем | время, с | что не прошло |",
-             "|---|---|---|---|---|---|---|"]
+             "| кейс | успешно | pass^1 | pass^k | $ в среднем | время, с | запусков сабагентов | продолжений | что не прошло |",
+             "|---|---|---|---|---|---|---|---|---|"]
     for name, c in s["cases"].items():
         fails = ", ".join(f"{key}×{v}" for key, v in c["check_fail_counts"].items() if v) or "—"
         lines.append(f"| {name} | {c['passed']}/{c['runs']} | {c['pass_hat']['1']} | {c['pass_hat'].get(str(c['runs']))} | "
-                     f"{round(c['mean_cost_usd'], 2) if c['mean_cost_usd'] is not None else '—'} | {round(c['mean_wall_s']) if c['mean_wall_s'] is not None else '—'} | {fails} |")
+                     f"{round(c['mean_cost_usd'], 2) if c['mean_cost_usd'] is not None else '—'} | {round(c['mean_wall_s']) if c['mean_wall_s'] is not None else '—'} | "
+                     f"{c.get('mean_subagents', '—')} | {c.get('mean_resumes', '—')} | {fails} |")
     o = s["overall"]
     hat_k = f", pass^{k} {o.get(f'pass_hat_{k}')}" if k > 1 else ""
     lines += ["", f"Итого: успешно {o['pass_rate']}, pass^1 {o['pass_hat_1']}{hat_k}, "
@@ -468,11 +472,12 @@ def cmd_compare(args) -> int:
         return f"{x} → {y}" + (f" ({(y - x) / x * 100:+.0f}%)" if x else "")
 
     print(f"A: {a['meta']['commit']} ({a['meta']['started']})  B: {b['meta']['commit']} ({b['meta']['started']})\n")
-    print("| кейс | успешно | $ в среднем | время, с |\n|---|---|---|---|")
+    print("| кейс | успешно | $ в среднем | время, с | запусков сабагентов |\n|---|---|---|---|---|")
     for name in sorted(set(a["cases"]) | set(b["cases"])):
         ca, cb = a["cases"].get(name, {}), b["cases"].get(name, {})
         print(f"| {name} | {delta(ca.get('pass_rate'), cb.get('pass_rate'))} | "
-              f"{delta(ca.get('mean_cost_usd'), cb.get('mean_cost_usd'))} | {delta(ca.get('mean_wall_s'), cb.get('mean_wall_s'))} |")
+              f"{delta(ca.get('mean_cost_usd'), cb.get('mean_cost_usd'))} | {delta(ca.get('mean_wall_s'), cb.get('mean_wall_s'))} | "
+              f"{delta(ca.get('mean_subagents'), cb.get('mean_subagents'))} |")
     print("\n| кейс | роль | вход всего | выход | Read/Grep/Glob |\n|---|---|---|---|---|")
     for name in sorted(set(a["cases"]) & set(b["cases"])):
         ra, rb = a["cases"][name]["mean_tokens_by_role"], b["cases"][name]["mean_tokens_by_role"]
