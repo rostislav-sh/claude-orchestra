@@ -80,7 +80,7 @@ def load_cases(pattern: str) -> list[dict]:
     for case_file in sorted(CASES.glob("*/case.json")):
         case = json.loads(case_file.read_text(encoding="utf-8"))
         case["dir"] = case_file.parent
-        if fnmatch.fnmatch(case["name"], pattern):
+        if any(fnmatch.fnmatch(case["name"], p.strip()) for p in pattern.split(",")):
             cases.append(case)
     return cases
 
@@ -518,7 +518,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Eval плагина orchestra")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="прогнать кейсы через Claude Code")
-    r.add_argument("--cases", default="*", help="шаблон имени кейса, например 's-*'")
+    r.add_argument("--cases", default="*", help="шаблоны имён кейсов через запятую, например 's-*,m-escalation'")
     r.add_argument("-k", type=int, default=3, help="попыток на кейс")
     r.add_argument("--model", default="opus", help="модель тимлида (основной сессии)")
     r.add_argument("-j", "--jobs", type=int, default=1, help="прогонов параллельно")
