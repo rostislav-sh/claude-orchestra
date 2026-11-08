@@ -41,6 +41,8 @@ import time
 PLUGIN_PREFIX = "orchestra"
 STATE_DIR = ".orchestra"
 REPORTS_DIR = ".orchestra/reports"
+# Карта кода описывает реализацию — тестеру она закрыта так же, как исходники. tests.md открыт.
+CODE_MAP_FILES = (".orchestra/map/code.md", ".orchestra/map/code.json")
 GUARD_LOG = ".orchestra/reports/guard.log"
 DEFAULT_CONFIG = {"tests_dir": "tests", "source_dirs": ["src", "app"]}
 
@@ -530,13 +532,17 @@ RECURSIVE_SEARCH = {"rg", "ag", "ack", "tree", "find", "fd"}
 CODE_CHARS = re.compile(r"[\s'\"(),;]")
 
 
-def path_hits(rel: str | None, src: str, tests: str) -> bool:
-    if rel is None or under(rel, tests) or under(rel, STATE_DIR):
+def path_hits(rel: str | None, src: str, tests: str, recursive: bool = True) -> bool:
+    if rel is None:
+        return False
+    if src in CODE_MAP_FILES:
+        return rel == src or (recursive and is_parent_of(rel, src))
+    if under(rel, tests) or under(rel, STATE_DIR):
         return False
     return under(rel, src) or is_parent_of(rel, src)
 
 
-def token_hits(tok: str, src: str, tests: str, vcwd: str, root: str) -> bool:
+def token_hits(tok: str, src: str, tests: str, vcwd: str, root: str, recursive: bool = True) -> bool:
     if not tok or (tok.startswith("-") and "=" not in tok):
         return False
     parts = [tok] + (tok.split("=")[1:] if "=" in tok else [])
@@ -548,7 +554,7 @@ def token_hits(tok: str, src: str, tests: str, vcwd: str, root: str) -> bool:
             if re.search(r"(^|[\s'\"=(:,/\\])" + re.escape(src) + r"([/\\]|\s|$|['\");,])", part):
                 return True
             continue
-        if path_hits(rel_to_root(part, vcwd, root), src, tests):
+        if path_hits(rel_to_root(part, vcwd, root), src, tests, recursive):
             return True
     return False
 
@@ -586,11 +592,26 @@ def check_tester_shell(argvs: list[list[str]], cwd: str, root: str, cfg: dict) -
                     f"Тестер не читает реализацию ({src}/) через shell. Запускать тесты можно "
                     f"(pytest, python -m pytest, ...). Если не хватает контракта — сообщи тимлиду."
                 )
+        for cmap in CODE_MAP_FILES:
+            if any(token_hits(t, cmap, tests, vcwd, root, recursive) for t in argv[1:]) or (
+                recursive and path_hits(rel_to_root(vcwd, vcwd, root), cmap, tests)
+                and not any(not a.startswith("-") and os.path.exists(os.path.join(vcwd, native_path(a))) for a in argv[1:])
+            ):
+                block(
+                    f"Карта кода ({cmap}) описывает реализацию — тестеру она закрыта. "
+                    f"Тебе нужна {STATE_DIR}/map/tests.md и контракты."
+                )
 
 
 def check_tester_read(rel: str | None, cfg: dict, search: bool) -> None:
     if rel is None:
         return
+    for cmap in CODE_MAP_FILES:
+        if rel == cmap or (search and is_parent_of(rel, cmap)):
+            block(
+                f"Карта кода ({cmap}) описывает реализацию — тестеру она закрыта. Читай {STATE_DIR}/map/tests.md "
+                f"и {STATE_DIR}/contracts.md; ищи точечно (Grep по {cfg['tests_dir']}/ или по конкретному файлу)."
+            )
     if under(rel, cfg["tests_dir"]) or under(rel, STATE_DIR):
         return
     for src in cfg["source_dirs"]:

@@ -239,7 +239,7 @@ def claude_command(case: dict, args) -> list[str]:
     cmd = [
         args.claude, "-p", f"/orchestra:teamlead {case['task']}",
         "--output-format", "json",
-        "--plugin-dir", str(PLUGIN),
+        "--plugin-dir", str(getattr(args, "plugin", None) or PLUGIN),
         "--model", args.model,
         "--permission-mode", args.permission_mode,
         "--disallowedTools", "EnterPlanMode", "ExitPlanMode", "AskUserQuestion",
@@ -501,6 +501,7 @@ def main(argv=None) -> int:
     r.add_argument("--claude", default="claude", help="путь к CLI Claude Code")
     r.add_argument("--out", help="папка результатов (по умолчанию evals/results/<время>)")
     r.add_argument("--keep", action="store_true", help="не удалять рабочие копии проектов")
+    r.add_argument("--plugin", help="папка плагина вместо plugins/orchestra этого репозитория (сравнить версии)")
     s = sub.add_parser("self-check", help="проверить кейсы без Claude")
     s.add_argument("--cases", default="*")
     c = sub.add_parser("compare", help="сравнить два summary.json")

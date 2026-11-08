@@ -477,3 +477,45 @@ def test_block_is_written_to_guard_log(project):
     assert run(project, "orchestra:tester", "Read", {"file_path": str(project / "src/a.py")}) == BLOCK
     log = (project / ".orchestra/reports/guard.log").read_text(encoding="utf-8")
     assert "tester: заблокировано Read" in log and "src/a.py" in log
+
+
+# ------------------------------------------------------------ карта проекта
+
+
+@pytest.fixture
+def mapped(project):
+    (project / ".orchestra/map").mkdir(parents=True, exist_ok=True)
+    for name in ("code.md", "code.json", "tests.md"):
+        (project / ".orchestra/map" / name).write_text("x", encoding="utf-8")
+    return project
+
+
+@pytest.mark.parametrize("tool, tin", [
+    ("Read", {"file_path": ".orchestra/map/code.md"}),
+    ("Read", {"file_path": ".orchestra/map/code.json"}),
+    ("Grep", {"pattern": "Cart", "path": ".orchestra"}),
+    ("Grep", {"pattern": "Cart", "path": ".orchestra/map"}),
+    ("Bash", {"command": "cat .orchestra/map/code.md"}),
+    ("Bash", {"command": "cd .orchestra/map && head code.md"}),
+    ("Bash", {"command": "grep -r Cart .orchestra"}),
+    ("Bash", {"command": "python3 -c \"print(open('.orchestra/map/code.md').read())\""}),
+])
+def test_tester_cannot_read_code_map(mapped, tool, tin):
+    assert run(mapped, "orchestra:tester", tool, tin) == BLOCK, tin
+
+
+@pytest.mark.parametrize("tool, tin", [
+    ("Read", {"file_path": ".orchestra/map/tests.md"}),
+    ("Read", {"file_path": ".orchestra/contracts.md"}),
+    ("Bash", {"command": "cat .orchestra/map/tests.md"}),
+    ("Bash", {"command": "ls .orchestra .orchestra/map"}),
+    ("Grep", {"pattern": "export", "path": ".orchestra/contracts.md"}),
+])
+def test_tester_can_read_tests_map_and_contracts(mapped, tool, tin):
+    assert run(mapped, "orchestra:tester", tool, tin) == ALLOW, tin
+
+
+@pytest.mark.parametrize("role", ["orchestra:coder", "orchestra:reviewer", "orchestra:architect", "orchestra:debugger"])
+def test_other_roles_read_code_map(mapped, role):
+    assert run(mapped, role, "Read", {"file_path": ".orchestra/map/code.md"}) == ALLOW
+    assert run(mapped, role, "Bash", {"command": "cat .orchestra/map/code.md"}) == ALLOW

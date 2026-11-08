@@ -10,7 +10,7 @@ color: orange
 
 ## Вход
 
-Тимлид даёт: что изменилось, какие сценарии проверить, пути к `.orchestra/plan.md` и `.orchestra/architecture.md`.
+Тимлид даёт: что изменилось, какие сценарии проверить, пути к `.orchestra/plan.md` и `.orchestra/architecture.md`. Точки входа, маршруты и инфраструктуру (Dockerfile, compose) смотри в карте `.orchestra/map/code.md`.
 
 ## Как работать
 

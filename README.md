@@ -104,6 +104,30 @@ claude plugin install orchestra@rostislav-plugins --scope project
 
 Хук считает скрипт запуском тестов, поэтому тестеру он доступен так же, как pytest.
 
+## Карта проекта: `scripts/project_map.py`
+
+Чтобы агенты не изучали проект каждый раз заново через Glob/Grep, тимлид собирает карту в `.orchestra/map/`:
+
+- **`code.md`** — файлы кода по папкам: одна строка «что делает», публичные классы (с методами) и функции, HTTP-маршруты (`@router.get(...)`), точки входа, Dockerfile/compose/миграции. Читают архитектор, кодеры, ревьюер, дебаггер. **Тестеру закрыт хуком**: в нём устройство реализации.
+- **`tests.md`** — тестовые файлы: сколько тестов, какие модули проекта импортируют, какие фикстуры используют; фикстуры `conftest.py` со scope и описанием; команда запуска; итог последнего прогона `run_tests.py`; модули без тестов. Открыт всем.
+
+Карту собирает код (AST), без модели, за доли секунды: на шаге 0 и после каждого пункта вместе с коммитом. Описание файла — первая строка docstring модуля или ручное описание (`describe`). У каждого файла хранится хеш: изменённый файл получает пометку «(устарело)», а новые файлы без docstring попадают в `need_description` — модель описывает одной строкой только их.
+
+```bash
+python3 <плагин>/scripts/project_map.py build
+echo '{"src/app/service.py": "Бизнес-логика заказов"}' | python3 <плагин>/scripts/project_map.py describe
+```
+
+Пример куска `code.md`:
+
+```markdown
+**HTTP-маршруты:**
+- GET /orders → `list_orders` · `src/app/api/orders.py`
+
+## src/app/
+- `service.py` — Бизнес-логика заказов · `OrderService`(create, cancel), `helper()`
+```
+
 ## Журнал расхода токенов
 
 Хук на `SubagentStop` и `Stop` (`scripts/usage.py`) после каждого сабагента и каждого хода тимлида читает транскрипт и дописывает в `.orchestra/reports/usage.jsonl`: роль, модель, запросы, вход без кеша, запись и чтение кеша, выход, вызовы инструментов. Модель он не вызывает и токенов не тратит; пишет только в проектах с папкой `.orchestra/`.
@@ -144,7 +168,7 @@ python3 evals/run_evals.py compare evals/results/A/summary.json evals/results/B/
 ```bash
 claude --plugin-dir ./plugins/orchestra      # загрузить без установки
 claude plugin validate ./plugins/orchestra
-python3 -m pytest dev -q                      # тесты хука, скриптов и обвязки eval
+python3 -m pytest dev -q                      # тесты хука, скриптов (run_tests, usage, project_map) и обвязки eval
 ```
 
 CI (`.github/workflows/ci.yml`) гоняет тесты из `dev/` (хук, `run_tests.py`, журнал расхода, self-check кейсов eval) на Python 3.9 и 3.13 и `claude plugin validate`. Сам eval с вызовом Claude в CI не запускается: он платный.
