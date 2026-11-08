@@ -126,3 +126,14 @@ def test_claude_command_is_headless_and_isolated():
     for flag in ("--plugin-dir", "--strict-mcp-config", "--append-system-prompt", "--max-budget-usd"):
         assert flag in cmd
     assert "EnterPlanMode" in cmd and "AskUserQuestion" in cmd
+
+
+def test_infra_errors_are_not_failures():
+    assert run_evals.is_infra_error({"is_error": True, "api_error_status": 429, "api_error": "usage_limit_reached"})
+    assert not run_evals.is_infra_error({"is_error": True, "terminal_reason": "max_turns"})
+    ok = {"case": "a", "run": 1, "passed": True, "cost_usd": 1, "checks": {}, "usage_by_role": {}}
+    bad = {"case": "a", "run": 2, "passed": False, "infra_error": "limit", "checks": {}}
+    s = run_evals.summarize([ok, bad], 2, {"started": "t", "model": "m", "k": 2, "commit": "c", "cases": ["a"]})
+    assert s["cases"]["a"]["runs"] == 1 and s["cases"]["a"]["pass_rate"] == 1.0
+    assert s["meta"]["infra_errors"] == 1
+    assert "сбоя инфраструктуры" in run_evals.render_summary(s)

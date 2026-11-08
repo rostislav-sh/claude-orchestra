@@ -275,7 +275,20 @@ def run_claude(case: dict, work: Path, args, log_path: Path) -> dict:
     return result
 
 
+LIMIT_ERRORS = ("usage_limit_reached", "rate_limit", "overloaded")
+STOP = {"reason": None}
+
+
+def is_infra_error(claude: dict) -> bool:
+    """Лимит подписки, rate limit, перегрузка API — не провал плагина."""
+    return bool(claude.get("is_error")) and (
+        claude.get("api_error_status") in (429, 529) or str(claude.get("api_error", "")) in LIMIT_ERRORS)
+
+
 def one_run(case: dict, idx: int, args, out_dir: Path) -> dict:
+    if STOP["reason"]:
+        print(f"– {case['name']} #{idx}  пропущен: {STOP['reason']}", flush=True)
+        return {"case": case["name"], "run": idx, "passed": False, "infra_error": STOP["reason"], "checks": {}}
     run_dir = out_dir / case["name"] / f"run-{idx}"
     run_dir.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=f"orchestra-eval-{case['name']}-"))
@@ -283,6 +296,9 @@ def one_run(case: dict, idx: int, args, out_dir: Path) -> dict:
     try:
         prep = prepare(case, work)
         claude = run_claude(case, work, args, run_dir / "claude.json")
+        if is_infra_error(claude):
+            STOP["reason"] = str(claude.get("result") or claude.get("api_error"))[:120]
+            raise RuntimeError(f"infra: {STOP['reason']}")
         checks = check(case, work, prep, claude)
         rows = usage.load_journal(str(work))
         by_role = usage.aggregate(rows, "role")
@@ -306,6 +322,8 @@ def one_run(case: dict, idx: int, args, out_dir: Path) -> dict:
         (run_dir / "diff.patch").write_text(git(work, "diff", prep["base"], check=False), encoding="utf-8")
     except Exception as exc:  # прогон не должен ронять весь eval
         record = {"case": case["name"], "run": idx, "passed": False, "error": repr(exc), "checks": {}}
+        if str(exc).startswith("infra:"):
+            record["infra_error"] = str(exc)[7:]
     finally:
         if args.keep:
             record_path = run_dir / "workdir.txt"
@@ -332,6 +350,10 @@ def mean(values):
 
 
 def summarize(records: list[dict], k: int, meta: dict) -> dict:
+    infra = [r for r in records if r.get("infra_error")]
+    records = [r for r in records if not r.get("infra_error")]
+    if infra:
+        meta = dict(meta, infra_errors=len(infra), infra_reason=infra[0]["infra_error"])
     cases = {}
     for rec in records:
         cases.setdefault(rec["case"], []).append(rec)
@@ -386,6 +408,8 @@ def render_summary(s: dict) -> str:
                      f"{c.get('mean_subagents', '—')} | {c.get('mean_resumes', '—')} | {fails} |")
     o = s["overall"]
     hat_k = f", pass^{k} {o.get(f'pass_hat_{k}')}" if k > 1 else ""
+    if s["meta"].get("infra_errors"):
+        lines += ["", f"**Не учтено {s['meta']['infra_errors']} прогонов из-за сбоя инфраструктуры:** {s['meta']['infra_reason']}"]
     lines += ["", f"Итого: успешно {o['pass_rate']}, pass^1 {o['pass_hat_1']}{hat_k}, "
                   f"потрачено ${o['total_cost_usd']}", "", "## Токены по ролям (среднее на прогон)", ""]
     for name, c in s["cases"].items():
@@ -420,6 +444,8 @@ def cmd_run(args) -> int:
     (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
     (out_dir / "summary.md").write_text(render_summary(summary), encoding="utf-8")
     print("\n" + render_summary(summary))
+    if summary["meta"].get("infra_errors"):
+        return 3
     return 0 if summary["overall"]["pass_rate"] == 1 else 1
 
 
