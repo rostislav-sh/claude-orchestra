@@ -21,6 +21,10 @@
 и без docstring файл попадает в список need — его описывает архитектор или тимлид одной
 строкой через describe. Так модель тратит токены только на новые и изменённые файлы.
 
+Карта собирается, только если в проекте не меньше 150 файлов кода (`map_min_files` в
+.orchestra/config.json, `--force` — собрать всё равно): на маленьком проекте изучить код
+напрямую не дороже, чем прочитать карту. Иначе build печатает {"enabled": false, ...}.
+
 build печатает короткий JSON: сколько файлов, что изменилось с прошлой сборки, кому нужно
 описание. Сборка идёт за доли секунды — запускай её после каждого пункта плана.
 """
@@ -39,6 +43,9 @@ STATE_DIR = ".orchestra"
 MAP_DIR = os.path.join(STATE_DIR, "map")
 CODE_MD, TESTS_MD, CODE_JSON = "code.md", "tests.md", "code.json"
 DEFAULT_CONFIG = {"tests_dir": "tests", "source_dirs": ["src", "app"]}
+# Ниже порога карта не окупается: по eval на проекте из 44 модулей изучить код через cat/grep
+# стоит столько же, сколько прочитать карту, а карта попадает в контекст каждому агенту.
+DEFAULT_MIN_FILES = 150
 
 SKIP_DIRS = {
     ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".venv", "venv",
@@ -88,6 +95,8 @@ def load_config(root: str) -> dict:
             cfg["source_dirs"] = [str(d) for d in data["source_dirs"]]
         if isinstance(data.get("test_command"), str):
             cfg["test_command"] = data["test_command"]
+        if isinstance(data.get("map_min_files"), int):
+            cfg["map_min_files"] = data["map_min_files"]
     cfg["tests_dir"] = cfg["tests_dir"].replace("\\", "/").strip("/") or "tests"
     cfg["source_dirs"] = [d.replace("\\", "/").strip("/") for d in cfg["source_dirs"] if d.strip("/")]
     return cfg
@@ -322,10 +331,15 @@ def describe_entry(entry: dict, info: dict) -> tuple[str, bool]:
     return "", True
 
 
-def build(root: str, cfg: dict) -> dict:
+def build(root: str, cfg: dict, force: bool = False) -> dict:
     state = load_state(root)
     old = state["files"]
     code, tests = collect(root, cfg)
+    threshold = int(cfg.get("map_min_files", DEFAULT_MIN_FILES))
+    py_code = sum(1 for p in code if p.endswith(".py"))
+    if py_code < threshold and not force:
+        return {"enabled": False, "code_files": py_code, "threshold": threshold,
+                "reason": f"в проекте {py_code} файлов кода < {threshold}: карта не нужна, изучай код напрямую"}
     files, changed, added = {}, [], []
     infos: dict[str, dict] = {}
     for path in code:
@@ -361,7 +375,7 @@ def build(root: str, cfg: dict) -> dict:
     state = {"built_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "files": files}
     write(root, CODE_JSON, json.dumps(state, ensure_ascii=False, indent=1))
     return {
-        "code_files": len(code), "test_files": len(tests),
+        "enabled": True, "code_files": len(code), "test_files": len(tests),
         "added": added if old else [], "changed": changed, "removed": removed,
         "need_description": need,
         "map": [f"{MAP_DIR}/{CODE_MD}", f"{MAP_DIR}/{TESTS_MD}"],
@@ -509,6 +523,7 @@ def render_tests(root: str, cfg: dict, code: list[str], tests: list[str]) -> str
 
 
 def describe(root: str, cfg: dict, data: dict) -> dict:
+    cfg = dict(cfg, map_min_files=0)  # describe вызывают только для уже собранной карты
     state = load_state(root)
     unknown = []
     for path, desc in data.items():
@@ -532,6 +547,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("cmd", choices=["build", "describe", "need"])
     ap.add_argument("--root")
+    ap.add_argument("--force", action="store_true", help="собрать карту даже на маленьком проекте")
     args = ap.parse_args(argv)
     root = find_root(args.root or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
     if not os.path.isdir(os.path.join(root, STATE_DIR)):
@@ -549,9 +565,9 @@ def main(argv=None) -> int:
             return 2
         result = describe(root, cfg, data)
     else:
-        result = build(root, cfg)
+        result = build(root, cfg, force=args.force)
         if args.cmd == "need":
-            result = {"need_description": result["need_description"]}
+            result = {"need_description": result.get("need_description", [])}
     print(json.dumps(result, ensure_ascii=False, indent=1))
     return 0
 

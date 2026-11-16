@@ -13,7 +13,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "plugins/orchestra/scripts/projec
 def project(tmp_path):
     p = tmp_path / "proj"
     (p / ".orchestra").mkdir(parents=True)
-    (p / ".orchestra/config.json").write_text(json.dumps({"tests_dir": "tests", "source_dirs": ["src"]}))
+    (p / ".orchestra/config.json").write_text(json.dumps({"tests_dir": "tests", "source_dirs": ["src"], "map_min_files": 0}))
     (p / "src/app/api").mkdir(parents=True)
     (p / "src/app/__init__.py").write_text("")
     (p / "src/app/api/__init__.py").write_text("")
@@ -149,6 +149,7 @@ def test_last_run_in_tests_map(project):
 def test_whole_project_when_no_source_dirs(tmp_path):
     p = tmp_path / "flat"
     (p / ".orchestra").mkdir(parents=True)
+    (p / ".orchestra/config.json").write_text(json.dumps({"map_min_files": 0}))
     (p / "mybot").mkdir()
     (p / "mybot/handlers.py").write_text('"""Хендлеры бота."""\n')
     (p / ".venv/lib").mkdir(parents=True)
@@ -183,3 +184,18 @@ def test_nested_routes_fields_and_enums(project):
     assert "`Status`{OPEN, CLOSED}" in md
     assert "`Ticket`{id, title}(close)" in md and "_secret" not in md
     assert "POST /users → `create_user` · `src/app/api/users.py`" in md
+
+
+def test_small_project_skips_map(tmp_path):
+    p = tmp_path / "small"
+    (p / ".orchestra").mkdir(parents=True)
+    (p / "src").mkdir()
+    for i in range(3):
+        (p / f"src/m{i}.py").write_text('"""Модуль."""\n')
+    res = run(p, "build")
+    assert res["enabled"] is False and res["code_files"] == 3 and res["threshold"] == 150
+    assert not (p / ".orchestra/map").exists()
+    forced = subprocess.run([sys.executable, str(SCRIPT), "build", "--force", "--root", str(p)],
+                            capture_output=True, encoding="utf-8")
+    assert json.loads(forced.stdout)["enabled"] is True
+    assert (p / ".orchestra/map/code.md").exists()
