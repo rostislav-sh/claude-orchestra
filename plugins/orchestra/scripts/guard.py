@@ -42,7 +42,7 @@ PLUGIN_PREFIX = "orchestra"
 STATE_DIR = ".orchestra"
 REPORTS_DIR = ".orchestra/reports"
 # Карта кода описывает реализацию — тестеру она закрыта так же, как исходники. tests.md открыт.
-CODE_MAP_FILES = (".orchestra/map/code.md", ".orchestra/map/code.json")
+CODE_MAP_FILES = (".orchestra/map/code.md", ".orchestra/map/code.json", ".orchestra/map/code")
 GUARD_LOG = ".orchestra/reports/guard.log"
 DEFAULT_CONFIG = {"tests_dir": "tests", "source_dirs": ["src", "app"]}
 
@@ -536,7 +536,7 @@ def path_hits(rel: str | None, src: str, tests: str, recursive: bool = True) -> 
     if rel is None:
         return False
     if src in CODE_MAP_FILES:
-        return rel == src or (recursive and is_parent_of(rel, src))
+        return under(rel, src) or (recursive and is_parent_of(rel, src))
     if under(rel, tests) or under(rel, STATE_DIR):
         return False
     return under(rel, src) or is_parent_of(rel, src)
@@ -607,7 +607,7 @@ def check_tester_read(rel: str | None, cfg: dict, search: bool) -> None:
     if rel is None:
         return
     for cmap in CODE_MAP_FILES:
-        if rel == cmap or (search and is_parent_of(rel, cmap)):
+        if under(rel, cmap) or (search and is_parent_of(rel, cmap)):
             block(
                 f"Карта кода ({cmap}) описывает реализацию — тестеру она закрыта. Читай {STATE_DIR}/map/tests.md "
                 f"и {STATE_DIR}/contracts.md; ищи точечно (Grep по {cfg['tests_dir']}/ или по конкретному файлу)."

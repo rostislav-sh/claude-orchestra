@@ -51,19 +51,27 @@ def run(project, *args, stdin=None):
     return json.loads(proc.stdout)
 
 
+def read_all(project, index, sub):
+    """Индекс и все файлы подробностей одной строкой — для проверок содержимого."""
+    base = project / ".orchestra/map"
+    parts = [(base / index).read_text(encoding="utf-8")]
+    parts += [f.read_text(encoding="utf-8") for f in sorted((base / sub).glob("*.md"))] if (base / sub).is_dir() else []
+    return "\n".join(parts)
+
+
 def read_code_md(project):
-    return (project / ".orchestra/map/code.md").read_text(encoding="utf-8")
+    return read_all(project, "code.md", "code")
 
 
 def read_tests_md(project):
-    return (project / ".orchestra/map/tests.md").read_text(encoding="utf-8")
+    return read_all(project, "tests.md", "tests")
 
 
 def test_build_code_map(project):
     res = run(project, "build")
     assert res["code_files"] == 7 and res["test_files"] == 2
     md = read_code_md(project)
-    assert "## src/app/" in md and "## src/app/api/" in md
+    assert "# src/app/" in md and "# src/app/api/" in md
     assert "`orders.py` — Эндпоинты заказов." in md
     assert "`list_orders()`" in md and "_private" not in md
     assert "`OrderService`(create)" in md and "_hidden" not in md
@@ -73,7 +81,7 @@ def test_build_code_map(project):
     assert "POST /orders → `create_order`" in md
     assert "**Точки входа:** `src/app/main.py`" in md
     assert "`Dockerfile`" in md and "README" not in md
-    assert "синтаксическая ошибка" in md
+    assert "`broken.py` — **нет описания** · `f()`" in md   # не разобрался AST — запасной разбор регуляркой
 
 
 def test_need_description_only_without_docstring(project):
@@ -122,10 +130,10 @@ def test_tests_map(project):
     md = read_tests_md(project)
     assert "тестов: 2" in md
     assert "`client` (tests/conftest.py, session) — HTTP-клиент приложения." in md
-    assert "`test_orders.py` — 2 тест(ов) · модули: `app.api.orders` · фикстуры: client, tmp_path" in md
+    assert "`tests/test_orders.py` — 2 тест(ов) · модули: `app.api.orders` · фикстуры: client, tmp_path" in md
     assert "test_list, TestCreate.test_ok" in md
-    assert "## Модули без тестов" in md and "`app.service`" in md and "`app.main`" in md
-    assert "`app.api.orders`" not in md.split("## Модули без тестов")[1]
+    untested = md.split("**Модули без тестов**")[1]
+    assert "`app.service`" in untested and "`app.main`" in untested and "`app.api.orders`" not in untested
     assert "python -m pytest tests" in md
 
 
@@ -199,3 +207,70 @@ def test_small_project_skips_map(tmp_path):
                             capture_output=True, encoding="utf-8")
     assert json.loads(forced.stdout)["enabled"] is True
     assert (p / ".orchestra/map/code.md").exists()
+
+
+def test_two_level_layout(project):
+    res = run(project, "build")
+    base = project / ".orchestra/map"
+    index = (base / "code.md").read_text(encoding="utf-8")
+    # индекс: папка одной строкой со ссылкой на подробности, без символов файлов
+    assert "- `src/app/api/` (1) · orders → `code/src.app.api.md`" in index
+    assert "OrderService" not in index and "list_orders()" not in index
+    assert (base / "code/src.app.api.md").exists() and (base / "code/src.app.md").exists()
+    tindex = (base / "tests.md").read_text(encoding="utf-8")
+    assert "`src/app/api/` — тестовых файлов: 1, тестов: 2 → `tests/src.app.api.md`" in tindex
+    assert "test_list" not in tindex
+    assert "- `tests/conftest.py`: client" in tindex
+    assert res["map_files"] >= 5
+
+
+def test_removed_dirs_drop_detail_files(project):
+    run(project, "build")
+    assert (project / ".orchestra/map/code/src.app.api.md").exists()
+    for f in (project / "src/app/api").iterdir():
+        f.unlink()
+    (project / "src/app/api").rmdir()
+    (project / "tests/test_orders.py").unlink()
+    run(project, "build")
+    assert not (project / ".orchestra/map/code/src.app.api.md").exists()
+    assert not (project / ".orchestra/map/tests/src.app.api.md").exists()
+
+
+def test_tests_attributed_to_rarest_import(tmp_path):
+    """Тест, который строит сущности, относится к проверяемому сервису, а не к пакету сущностей."""
+    p = tmp_path / "proj"
+    (p / ".orchestra").mkdir(parents=True)
+    (p / ".orchestra/config.json").write_text(json.dumps({"map_min_files": 0}))
+    (p / "src/app/entities").mkdir(parents=True)
+    (p / "src/app/services/pay").mkdir(parents=True)
+    (p / "src/app/entities/user.py").write_text('"""Пользователь."""\n')
+    (p / "src/app/services/orders.py").write_text('"""Заказы."""\n')
+    (p / "src/app/services/pay/__init__.py").write_text('"""Оплата."""\nfrom .core import pay\n')
+    (p / "src/app/services/pay/core.py").write_text('"""Ядро оплаты."""\ndef pay():\n    pass\n')
+    (p / "tests").mkdir()
+    for i in range(3):
+        (p / f"tests/test_user{i}.py").write_text("from app.entities.user import User\n\ndef test_x():\n    pass\n")
+    (p / "tests/test_orders.py").write_text(
+        "from app.entities.user import User\nfrom app.services.orders import create\n\ndef test_o():\n    pass\n")
+    (p / "tests/test_pay.py").write_text("from app.services.pay import pay\n\ndef test_p():\n    pass\n")
+    run(p, "build")
+    services = (p / ".orchestra/map/tests/src.app.services.md").read_text(encoding="utf-8")
+    entities = (p / ".orchestra/map/tests/src.app.entities.md").read_text(encoding="utf-8")
+    assert "test_orders.py" in services and "test_orders.py" not in entities
+    pay = (p / ".orchestra/map/tests/src.app.services.pay.md").read_text(encoding="utf-8")
+    assert "test_pay.py" in pay
+    assert "Модули без тестов" not in pay   # пакет покрыт через реэкспорт в __init__.py
+
+
+def test_telegram_handlers(project):
+    (project / "src/app/bot.py").write_text(
+        '"""Бот."""\nfrom aiogram import Router\nrouter = Router()\n\n'
+        '@router.message(Command("start"))\nasync def start(m):\n    pass\n\n'
+        '@router.callback_query(F.data == "ok")\nasync def ok(c):\n    pass\n'
+    )
+    run(project, "build")
+    index = (project / ".orchestra/map/code.md").read_text(encoding="utf-8")
+    assert "**Обработчики Telegram:** 2" in index
+    detail = (project / ".orchestra/map/code/src.app.md").read_text(encoding="utf-8")
+    assert "tg:message Command('start') → `start`" in detail
+    assert "tg:callback_query F.data == 'ok' → `ok`" in detail

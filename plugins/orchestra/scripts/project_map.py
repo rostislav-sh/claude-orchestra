@@ -7,14 +7,19 @@
 
 Карта лежит в .orchestra/map/ и собирается кодом, без модели:
 
-- code.md   — файлы кода по папкам: одна строка «что делает», публичные классы и функции,
-              HTTP-маршруты, точки входа, инфраструктура (Dockerfile, compose, миграции).
-              Читают архитектор, кодеры, ревьюер, дебаггер. Тестеру закрыт хуком: в нём
-              устройство реализации, а тестер работает по контрактам.
-- tests.md  — тестовые файлы: сколько тестов, какие модули проекта они импортируют, какие
-              фикстуры используют; фикстуры conftest.py; команда запуска; итог последнего
-              прогона run_tests.py; модули без тестов. Читают все.
-- code.json — служебное: хеш и описание каждого файла (тестеру тоже закрыт).
+Карта двухуровневая, чтобы на большом проекте агент читал несколько тысяч токенов, а не всё:
+
+- code.md         — индекс: точки входа, маршруты, инфраструктура и папки по одной строке
+                    (описание пакета, имена модулей) со ссылкой на файл подробностей.
+- code/<папка>.md — подробности папки: что делает каждый файл, публичные классы с полями
+                    и методами, функции, константы, HTTP-маршруты и обработчики Telegram.
+                    Индекс и подробности кода читают архитектор, кодеры, дебаггер. Тестеру
+                    закрыты хуком: в них устройство реализации, а тестер работает по контрактам.
+- tests.md        — индекс тестов: команда запуска, последний прогон run_tests.py, фикстуры
+                    по conftest.py, пакеты исходников со счётчиком тестов и модулей без тестов.
+- tests/<пакет>.md — тесты, которые импортируют этот пакет: файлы, имена тестов, фикстуры,
+                    модули без тестов. tests/_fixtures.md — фикстуры подробно. Открыто всем.
+- code.json       — служебное: хеш и описание каждого файла (тестеру тоже закрыт).
 
 Описание файла: ручное (из describe) → иначе первая строка docstring модуля. Если файл
 изменился после того, как описание написали, оно помечается «(устарело)». Без описания
@@ -65,6 +70,7 @@ HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "rou
 MAX_FILES = 3000
 MAX_SYMBOLS = 12
 MAX_TEST_NAMES = 12
+COMMON_SHARE = 0.15  # модуль, который импортирует больше 15% тестовых файлов, — общий
 
 
 # ---------------------------------------------------------------- проект
@@ -181,8 +187,20 @@ def first_line(text: str | None) -> str:
     return ""
 
 
+TG_EVENTS = {"message", "callback_query", "inline_query", "edited_message", "my_chat_member", "chat_member",
+             "pre_checkout_query", "channel_post", "chosen_inline_result", "poll_answer"}
+
+
 def route_of(dec: ast.expr) -> str | None:
-    """@router.get("/items") → "GET /items"."""
+    """@router.get("/items") → "GET /items"; @router.message(Command("start")) → "tg:message Command('start')"."""
+    if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr in TG_EVENTS
+            and isinstance(dec.func.value, (ast.Name, ast.Attribute))):
+        try:
+            filters = ", ".join(ast.unparse(a) for a in dec.args)
+        except Exception:  # noqa: BLE001
+            filters = "…"
+        filters = filters if len(filters) <= 80 else filters[:79] + "…"
+        return f"tg:{dec.func.attr} {filters}".rstrip()
     if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr in HTTP_METHODS:
         arg = dec.args[0] if dec.args else None
         path = arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else "?"
@@ -236,6 +254,22 @@ def py_summary(tree: ast.Module) -> dict:
     if len(symbols) > MAX_SYMBOLS:
         symbols = symbols[:MAX_SYMBOLS] + [f"… ещё {len(symbols) - MAX_SYMBOLS}"]
     return {"doc": first_line(ast.get_docstring(tree)), "symbols": symbols, "routes": routes, "main": main_guard}
+
+
+def regex_summary(root: str, path: str) -> dict:
+    """Файл, который не разбирает этот Python (например, синтаксис новее): классы и функции регуляркой."""
+    try:
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    doc = re.match(r'\s*(?:#[^\n]*\n\s*)*[rRuU]?("""|\'\'\')(.*?)\1', text, re.S)
+    symbols = [f"`{m}`" for m in re.findall(r"^class\s+([A-Za-z]\w*)", text, re.M) if not m.startswith("_")]
+    symbols += [f"`{m}()`" for m in re.findall(r"^(?:async\s+)?def\s+([A-Za-z]\w*)", text, re.M)]
+    if len(symbols) > MAX_SYMBOLS:
+        symbols = symbols[:MAX_SYMBOLS] + [f"… ещё {len(symbols) - MAX_SYMBOLS}"]
+    return {"doc": first_line(doc.group(2)) if doc else "", "symbols": symbols, "routes": [],
+            "main": bool(re.search(r"^if\s+__name__\s*==", text, re.M)), "approx": True}
 
 
 def module_names(path: str, source_dirs: list[str]) -> set[str]:
@@ -354,8 +388,7 @@ def build(root: str, cfg: dict, force: bool = False) -> dict:
         info = {}
         if path.endswith(".py"):
             tree = parse_py(root, path)
-            info = py_summary(tree) if tree else {"doc": "", "symbols": ["(не разобрался: синтаксическая ошибка)"],
-                                                  "routes": [], "main": False}
+            info = py_summary(tree) if tree else regex_summary(root, path)
         infos[path] = info
     removed = sorted(set(old) - set(files))
     need = []
@@ -366,12 +399,20 @@ def build(root: str, cfg: dict, force: bool = False) -> dict:
             base = os.path.basename(path)
             if base == "__init__.py" and not infos[path].get("symbols"):
                 continue
-            if INFRA_FILES.match(base) and not entry.get("desc"):
+            if INFRA_FILES.match(base) or not path.endswith(".py"):
                 continue
             need.append(path)
 
-    write(root, CODE_MD, render_code(root, cfg, files, infos, need))
-    write(root, TESTS_MD, render_tests(root, cfg, code, tests))
+    pages = render_code(root, cfg, files, infos, need)
+    pages.update(render_tests(root, cfg, code, tests))
+    for sub in ("code", "tests"):  # файлы папок, которых больше нет
+        d = os.path.join(root, MAP_DIR, sub)
+        if os.path.isdir(d):
+            for fn in os.listdir(d):
+                if f"{sub}/{fn}" not in pages:
+                    os.unlink(os.path.join(d, fn))
+    for name, text in pages.items():
+        write(root, name, text)
     state = {"built_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "files": files}
     write(root, CODE_JSON, json.dumps(state, ensure_ascii=False, indent=1))
     return {
@@ -379,12 +420,19 @@ def build(root: str, cfg: dict, force: bool = False) -> dict:
         "added": added if old else [], "changed": changed, "removed": removed,
         "need_description": need,
         "map": [f"{MAP_DIR}/{CODE_MD}", f"{MAP_DIR}/{TESTS_MD}"],
+        "map_files": len(pages),
         **({"truncated_at": MAX_FILES} if len(code) + len(tests) >= MAX_FILES else {}),
     }
 
 
-def render_code(root: str, cfg: dict, files: dict, infos: dict, need: list[str]) -> str:
-    entries, infra, routes = [], [], []
+def slug(directory: str) -> str:
+    """src/hhbot/application → src.hhbot.application (имя файла подробностей)."""
+    return (directory.strip("/") or "root").replace("/", ".")
+
+
+def render_code(root: str, cfg: dict, files: dict, infos: dict, need: list[str]) -> dict[str, str]:
+    """Индекс code.md и по файлу подробностей на каждую папку: code/<папка>.md."""
+    entries, infra, routes, handlers = [], [], [], 0
     for path in files:
         info = infos[path]
         base = os.path.basename(path)
@@ -392,49 +440,92 @@ def render_code(root: str, cfg: dict, files: dict, infos: dict, need: list[str])
             entries.append(path)
         if INFRA_FILES.match(base) or path.split("/")[0] in ("migrations", "alembic", "deploy", "docker"):
             infra.append(path)
-        routes += [f"{r} · `{path}`" for r in info.get("routes", [])]
-
-    lines = [
-        "# Карта кода",
-        "",
-        f"Собрано: {time.strftime('%Y-%m-%d %H:%M')} · файлов: {len(files)} · без описания: {len(need)}. "
-        "Собирается скриптом `project_map.py build`; описания — `project_map.py describe`.",
-        "Читай карту прежде, чем искать по проекту: Glob/Grep — только для того, чего в ней нет. "
-        "Обозначения: `Класс`{поля или члены Enum}(публичные методы), `функция()`.",
-        "",
-    ]
-    if entries:
-        lines += ["**Точки входа:** " + ", ".join(f"`{p}`" for p in entries), ""]
-    if routes:
-        lines += ["**HTTP-маршруты:**", ""] + [f"- {r}" for r in routes] + [""]
-    if infra:
-        lines += ["**Инфраструктура и конфиги:** " + ", ".join(f"`{p}`" for p in infra), ""]
+        for r in info.get("routes", []):
+            if r.startswith("tg:"):
+                handlers += 1
+            else:
+                routes.append(f"{r} · `{path}`")
 
     by_dir: dict[str, list[str]] = {}
     for path in files:
-        if path in infra and "/" not in path:
+        if path in infra and ("/" not in path or not path.endswith(".py")):
             continue
         by_dir.setdefault(os.path.dirname(path) or ".", []).append(path)
+
+    out: dict[str, str] = {}
+    index = [
+        "# Карта кода — индекс",
+        "",
+        f"Собрано: {time.strftime('%Y-%m-%d %H:%M')} · файлов: {len(files)} · папок: {len(by_dir)} · "
+        f"без описания: {len(need)}. Собирает `project_map.py build`; описания — `project_map.py describe`.",
+        "",
+        "Это индекс: папки по одной строке и имена модулей. **Подробности по папке** (что делает каждый файл, "
+        "классы с полями и методами, функции, маршруты) — в `.orchestra/map/code/<папка через точки>.md`, "
+        "ссылка в конце строки. Открывай только папки, которые касаются задачи. Glob/Grep — для того, чего нет в карте.",
+        "",
+    ]
+    if entries:
+        index += ["**Точки входа:** " + ", ".join(f"`{p}`" for p in entries), ""]
+    if routes:
+        shown = routes[:30]
+        index += ["**HTTP-маршруты:**", ""] + [f"- {r}" for r in shown]
+        if len(routes) > len(shown):
+            index.append(f"- … ещё {len(routes) - len(shown)} — в файлах папок")
+        index.append("")
+    if handlers:
+        index += [f"**Обработчики Telegram:** {handlers} — в файлах папок (строки `tg:`).", ""]
+    if infra:
+        index += ["**Инфраструктура и конфиги:** " + ", ".join(f"`{p}`" for p in infra), ""]
+    index += ["## Папки", ""]
+
     for d in sorted(by_dir):
-        lines.append(f"## {d}/")
-        for path in by_dir[d]:
+        paths = by_dir[d]
+        init = next((p for p in paths if os.path.basename(p) == "__init__.py"), None)
+        pkg_doc = infos[init].get("doc") if init else ""
+        modules = [os.path.splitext(os.path.basename(p))[0] for p in paths
+                   if os.path.basename(p) != "__init__.py"]
+        if not modules and not pkg_doc:
+            continue  # папка-обёртка без модулей
+        detail = f"code/{slug(d)}.md"
+        line = f"- `{d}/` ({len(modules)})"
+        if pkg_doc:
+            line += f" — {pkg_doc}"
+        if modules:
+            line += " · " + short_list(modules, 25)
+        n_need = sum(1 for p in paths if p in need)
+        if n_need:
+            line += f" · без описания: {n_need}"
+        index.append(line + f" → `{detail}`")
+
+        lines = [f"# {d}/", ""]
+        if pkg_doc:
+            lines += [pkg_doc, ""]
+        for path in paths:
             info = infos[path]
             desc, _ = describe_entry(files[path], info)
-            if os.path.basename(path) == "__init__.py" and not desc and not info.get("symbols"):
-                continue  # пустой пакетный файл
+            if os.path.basename(path) == "__init__.py" and not info.get("symbols"):
+                continue
             parts = [f"`{os.path.basename(path)}`"]
             parts.append(f"— {desc}" if desc else "— **нет описания**")
             if info.get("symbols"):
                 parts.append("· " + ", ".join(info["symbols"]))
             lines.append("- " + " ".join(parts))
-        lines.append("")
+            for r in info.get("routes", []):
+                lines.append(f"  - {r}")
+        out[detail] = "\n".join(lines) + "\n"
+    index.append("")
     if need:
-        lines += ["## Нужно описать", "", "Новые или изменённые файлы без актуального описания — по одной строке через "
+        index += ["## Нужно описать", "", "Новые или изменённые файлы без актуального описания — по одной строке через "
                   "`project_map.py describe`:", ""] + [f"- `{p}`" for p in need] + [""]
-    return "\n".join(lines)
+    out[CODE_MD] = "\n".join(index)
+    return out
 
 
-def render_tests(root: str, cfg: dict, code: list[str], tests: list[str]) -> str:
+def render_tests(root: str, cfg: dict, code: list[str], tests: list[str]) -> dict[str, str]:
+    """Индекс tests.md и подробности по пакетам исходников: tests/<папка>.md.
+
+    Тесты группируются по пакету исходников, который они импортируют: тестеру, работающему
+    над пакетом, нужны именно его тесты, а не папка tests/unit со всеми файлами подряд."""
     tests_dir = cfg["tests_dir"]
     fixtures: list[tuple[str, dict]] = []
     test_files = []
@@ -444,28 +535,80 @@ def render_tests(root: str, cfg: dict, code: list[str], tests: list[str]) -> str
             continue
         tree = parse_py(root, path)
         if tree is None:
-            test_files.append((path, None, set(), []))
-            continue
-        if os.path.basename(path) == "conftest.py":
-            fixtures += [(path, fx) for fx in fixtures_of(tree)]
+            test_files.append((path, None, set()))
             continue
         fixtures += [(path, fx) for fx in fixtures_of(tree)]
+        if os.path.basename(path) == "conftest.py":
+            continue
         imps = imports_of(tree)
         imported |= imps
-        test_files.append((path, tests_of(tree), imps, fixtures_of(tree)))
+        test_files.append((path, tests_of(tree), imps))
 
-    src_modules: dict[str, set[str]] = {}
-    for path in code:
-        if path.endswith(".py"):
-            src_modules[path] = module_names(path, cfg["source_dirs"])
+    src_modules: dict[str, set[str]] = {p: module_names(p, cfg["source_dirs"]) for p in code if p.endswith(".py")}
     fixture_names = {fx["name"] for _, fx in fixtures} | {"tmp_path", "monkeypatch", "capsys", "caplog", "request"}
 
-    total = sum(len(t) for _, t, _, _ in test_files if t)
-    lines = ["# Карта тестов", "", f"Собрано: {time.strftime('%Y-%m-%d %H:%M')} · тестовых файлов: {len(test_files)} · "
-             f"тестов: {total}", ""]
+    def is_tested(names: set[str]) -> bool:
+        return any(n == i or i.startswith(n + ".") for n in names for i in imported)
+
+    # Пакет, импортированный целиком (реэкспорт в __init__.py), считается покрытым вместе с модулями.
+    tested_pkgs = {os.path.dirname(p) for p, names in src_modules.items()
+                   if p.endswith("__init__.py") and any(n in imported for n in names)}
+
+    # К какому пакету относится тест. Тест импортирует и то, что проверяет, и то, из чего строит входные
+    # данные (сущности, перечисления, исключения). Проверяемое — то, что импортируют немногие тесты:
+    # берём модули с наименьшим числом импортирующих тестов (не больше чем вдвое от минимума).
+    # Импорт пакета (`from x.services.apply import ApplyService`) засчитывается этому пакету через __init__.py.
+    hits: dict[str, int] = {}
+    parsed = [t for t in test_files if t[1] is not None]
+    for _, _, imps in parsed:
+        for p, names in src_modules.items():
+            if names & imps:
+                hits[p] = hits.get(p, 0) + 1
+    common = {p for p, n in hits.items() if len(parsed) >= 20 and n > COMMON_SHARE * len(parsed)}
+
+    by_pkg: dict[str, list] = {}
+    other = []
+    for path, cases, imps in test_files:
+        mods = {p for p, names in src_modules.items() if names & imps}
+        if mods:
+            rarest = min(hits.get(p, 1) for p in mods)
+            mods = {p for p in mods if hits.get(p, 1) <= 2 * rarest}
+        pkgs = sorted({os.path.dirname(p) for p in mods})
+        if not pkgs:
+            other.append((path, cases, imps))
+        for pkg in pkgs:
+            by_pkg.setdefault(pkg, []).append((path, cases, imps))
+
+    def file_line(path, cases, imps):
+        if cases is None:
+            return [f"- `{path}` — не разбирается (синтаксическая ошибка)"]
+        covered = sorted({min(names, key=len) for p, names in src_modules.items()
+                          if names & imps and not p.endswith("__init__.py")})
+        used = sorted({a for _, args in cases for a in args if a in fixture_names})
+        names = [n for n, _ in cases]
+        line = f"- `{path}` — {len(cases)} тест(ов)"
+        if covered:
+            line += " · модули: " + ", ".join(f"`{m}`" for m in covered[:8]) + (" …" if len(covered) > 8 else "")
+        if used:
+            line += " · фикстуры: " + ", ".join(used)
+        out_lines = [line]
+        if names:
+            shown = ", ".join(names[:MAX_TEST_NAMES])
+            if len(names) > MAX_TEST_NAMES:
+                shown += f", … ещё {len(names) - MAX_TEST_NAMES}"
+            out_lines.append(f"  - {shown}")
+        return out_lines
+
+    out: dict[str, str] = {}
+    total = sum(len(t) for _, t, _ in test_files if t)
     cmd = cfg.get("test_command") or f"python -m pytest {tests_dir}"
-    lines += [f"**Запуск:** `run_tests.py` (команда: `{cmd}`); один файл — `run_tests.py {tests_dir}/<файл>`, "
-              "один тест — `run_tests.py -k <имя>`.", ""]
+    index = ["# Карта тестов — индекс", "",
+             f"Собрано: {time.strftime('%Y-%m-%d %H:%M')} · тестовых файлов: {len(test_files)} · тестов: {total}", "",
+             f"**Запуск:** `run_tests.py` (команда: `{cmd}`); один файл — `run_tests.py {tests_dir}/<файл>`, "
+             "один тест — `run_tests.py -k <имя>`.", "",
+             "Тесты сгруппированы по пакету исходников, который они импортируют. **Подробности** (файлы тестов, "
+             "имена тестов, фикстуры, модули без тестов) — в `.orchestra/map/tests/<пакет через точки>.md`; "
+             "открывай только нужные пакеты.", ""]
     last = None
     try:
         with open(os.path.join(root, STATE_DIR, "reports", "last-test-run.json"), encoding="utf-8") as f:
@@ -473,53 +616,61 @@ def render_tests(root: str, cfg: dict, code: list[str], tests: list[str]) -> str
     except (OSError, ValueError):
         pass
     if isinstance(last, dict):
-        lines += [f"**Последний прогон** ({last.get('finished_at', '?')}): {last.get('status')} — "
+        index += [f"**Последний прогон** ({last.get('finished_at', '?')}): {last.get('status')} — "
                   f"{last.get('passed', 0)} прошло, {last.get('failed', 0)} упало, {last.get('errors', 0)} ошибок, "
                   f"{last.get('skipped', 0)} пропущено.", ""]
         if last.get("failures"):
-            lines += [f"- ✗ `{f.get('test')}` — {f.get('message', '')}" for f in last["failures"][:10]] + [""]
+            index += [f"- ✗ `{f.get('test')}` — {f.get('message', '')}" for f in last["failures"][:10]] + [""]
 
     if fixtures:
-        lines += ["## Фикстуры", ""]
+        by_conf: dict[str, list[str]] = {}
+        for path, fx in fixtures:
+            if os.path.basename(path) == "conftest.py":  # локальные фикстуры файлов — только в подробностях
+                by_conf.setdefault(path, []).append(fx["name"])
+        index += [f"**Фикстуры conftest.py** (все {len(fixtures)}, включая локальные, — `tests/_fixtures.md`):", ""]
+        index += [f"- `{p}`: " + short_list(n, 20) for p, n in by_conf.items()] + [""]
+        fx_lines = ["# Фикстуры", ""]
         for path, fx in fixtures:
             scope = f", {fx['scope']}" if fx["scope"] != "function" else ""
-            lines.append(f"- `{fx['name']}` ({path}{scope})" + (f" — {fx['doc']}" if fx["doc"] else ""))
-        lines.append("")
+            fx_lines.append(f"- `{fx['name']}` ({path}{scope})" + (f" — {fx['doc']}" if fx["doc"] else ""))
+        out["tests/_fixtures.md"] = "\n".join(fx_lines) + "\n"
 
-    by_dir: dict[str, list] = {}
-    for item in test_files:
-        by_dir.setdefault(os.path.dirname(item[0]) or ".", []).append(item)
-    for d in sorted(by_dir):
-        lines.append(f"## {d}/")
-        for path, cases, imps, _ in by_dir[d]:
-            if cases is None:
-                lines.append(f"- `{os.path.basename(path)}` — не разбирается (синтаксическая ошибка)")
-                continue
-            covered = sorted({min(names, key=len) for p, names in src_modules.items()
-                              if names & imps and not p.endswith("__init__.py")})
-            used = sorted({a for _, args in cases for a in args if a in fixture_names})
-            names = [n for n, _ in cases]
-            shown = ", ".join(names[:MAX_TEST_NAMES]) + (f", … ещё {len(names) - MAX_TEST_NAMES}" if len(names) > MAX_TEST_NAMES else "")
-            line = f"- `{os.path.basename(path)}` — {len(cases)} тест(ов)"
-            if covered:
-                line += " · модули: " + ", ".join(f"`{m}`" for m in covered)
-            if used:
-                line += " · фикстуры: " + ", ".join(used)
-            lines.append(line)
-            if names:
-                lines.append(f"  - {shown}")
-        lines.append("")
-
-    untested = []
-    for path, names in sorted(src_modules.items()):
-        if os.path.basename(path) in ("__init__.py", "__main__.py", "conftest.py", "setup.py", "manage.py"):
+    pkgs = sorted({os.path.dirname(p) for p in src_modules} | set(by_pkg))
+    index += ["## Пакеты исходников", ""]
+    for pkg in pkgs:
+        items = by_pkg.get(pkg, [])
+        untested = [min(names, key=len) for p, names in sorted(src_modules.items())
+                    if os.path.dirname(p) == pkg
+                    and os.path.basename(p) not in ("__init__.py", "__main__.py", "conftest.py", "setup.py", "manage.py")
+                    and not is_tested(names) and pkg not in tested_pkgs]
+        if not items and not untested:
             continue
-        if not any(n == i or i.startswith(n + ".") for n in names for i in imported):
-            untested.append(min(names, key=len))
-    if untested:
-        lines += ["## Модули без тестов", "", "Ни один тест их не импортирует напрямую:", ""]
-        lines += [f"- `{m}`" for m in untested] + [""]
-    return "\n".join(lines)
+        n_tests = sum(len(c) for _, c, _ in items if c)
+        detail = f"tests/{slug(pkg)}.md"
+        line = f"- `{pkg}/` — тестовых файлов: {len(items)}, тестов: {n_tests}"
+        if untested:
+            line += f" · модулей без тестов: {len(untested)}"
+        index.append(line + f" → `{detail}`")
+        lines = [f"# Тесты пакета {pkg}/", ""]
+        for item in sorted(items):
+            lines += file_line(*item)
+        if common & {p for p in src_modules if os.path.dirname(p) == pkg}:
+            lines += ["", "Общие модули пакета (их импортирует больше 15% тестов, здесь перечислены только тесты, "
+                      "которые не импортируют других модулей проекта): "
+                      + ", ".join(f"`{min(src_modules[p], key=len)}`" for p in sorted(common) if os.path.dirname(p) == pkg)]
+        if untested:
+            lines += ["", "**Модули без тестов** (ни один тест не импортирует их напрямую): "
+                      + ", ".join(f"`{m}`" for m in untested)]
+        out[detail] = "\n".join(lines) + "\n"
+    if other:
+        index.append(f"- остальные тесты (не импортируют модули проекта напрямую): {len(other)} → `tests/_other.md`")
+        lines = ["# Тесты без прямого импорта модулей проекта", ""]
+        for item in sorted(other):
+            lines += file_line(*item)
+        out["tests/_other.md"] = "\n".join(lines) + "\n"
+    index.append("")
+    out[TESTS_MD] = "\n".join(index)
+    return out
 
 
 def describe(root: str, cfg: dict, data: dict) -> dict:

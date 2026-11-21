@@ -487,12 +487,18 @@ def mapped(project):
     (project / ".orchestra/map").mkdir(parents=True, exist_ok=True)
     for name in ("code.md", "code.json", "tests.md"):
         (project / ".orchestra/map" / name).write_text("x", encoding="utf-8")
+    for sub in ("code", "tests"):
+        (project / ".orchestra/map" / sub).mkdir()
+        (project / ".orchestra/map" / sub / "src.app.md").write_text("x", encoding="utf-8")
     return project
 
 
 @pytest.mark.parametrize("tool, tin", [
     ("Read", {"file_path": ".orchestra/map/code.md"}),
     ("Read", {"file_path": ".orchestra/map/code.json"}),
+    ("Read", {"file_path": ".orchestra/map/code/src.app.md"}),
+    ("Bash", {"command": "cat .orchestra/map/code/*.md"}),
+    ("Glob", {"pattern": "*.md", "path": ".orchestra/map/code"}),
     ("Grep", {"pattern": "Cart", "path": ".orchestra"}),
     ("Grep", {"pattern": "Cart", "path": ".orchestra/map"}),
     ("Bash", {"command": "cat .orchestra/map/code.md"}),
@@ -506,6 +512,8 @@ def test_tester_cannot_read_code_map(mapped, tool, tin):
 
 @pytest.mark.parametrize("tool, tin", [
     ("Read", {"file_path": ".orchestra/map/tests.md"}),
+    ("Read", {"file_path": ".orchestra/map/tests/src.app.md"}),
+    ("Bash", {"command": "cat .orchestra/map/tests/src.app.md"}),
     ("Read", {"file_path": ".orchestra/contracts.md"}),
     ("Bash", {"command": "cat .orchestra/map/tests.md"}),
     ("Bash", {"command": "ls .orchestra .orchestra/map"}),
