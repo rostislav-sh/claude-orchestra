@@ -27,7 +27,7 @@ def project(tmp_path):
     )
     (p / "src/app/service.py").write_text(
         "class OrderService:\n    def create(self):\n        pass\n    def _hidden(self):\n        pass\n\n"
-        "TRANSITIONS = {}\n__all__ = []\nT = 1\n\ndef helper():\n    pass\n"
+        "TRANSITIONS = {}\n__all__ = []\n_HIDDEN = 2\nT = 1\n\ndef helper():\n    pass\n"
     )
     (p / "src/app/broken.py").write_text("def f(:\n")
     (p / "Dockerfile").write_text("FROM python:3.12\n")
@@ -75,7 +75,7 @@ def test_build_code_map(project):
     assert "`orders.py` — Эндпоинты заказов." in md
     assert "`list_orders()`" in md and "_private" not in md
     assert "`OrderService`(create)" in md and "_hidden" not in md
-    assert "`TRANSITIONS`" in md and "`__all__`" not in md and "`T`" not in md
+    assert "`TRANSITIONS`" in md and "`__all__`" not in md and "`T`" not in md and "_HIDDEN" not in md
     assert "`__init__.py`" not in md   # пустые пакетные файлы не засоряют карту
     assert "GET /orders → `list_orders` · `src/app/api/orders.py`" in md
     assert "POST /orders → `create_order`" in md

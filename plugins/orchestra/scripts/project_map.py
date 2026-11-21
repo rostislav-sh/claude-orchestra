@@ -245,7 +245,7 @@ def py_summary(tree: ast.Module) -> dict:
             # Константы модуля (TRANSITIONS, TEMPLATES, DEFAULT_*) — частое место правок.
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for t in targets:
-                if isinstance(t, ast.Name) and t.id.isupper() and len(t.id) > 1 and t.id != "__all__":
+                if isinstance(t, ast.Name) and t.id.isupper() and len(t.id) > 1 and not t.id.startswith("_"):
                     symbols.append(f"`{t.id}`")
         elif isinstance(node, ast.If):
             test = node.test
